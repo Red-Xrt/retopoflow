@@ -380,33 +380,28 @@ class RFOperator_Translate_ScreenSpace(RFOperator):
                 co = nearest_point_valid_sources(context, co_world, world=False)
 
             if self.mirror:
-                co_orig = self.bmvs_co_orig[bmv]
                 t = self.mirror_threshold
                 zero = {
                     'x': ('x' in self.mirror and (sign_threshold(co.x, t.x) != sign_threshold(co_orig.x, t.x) or sign_threshold(co_orig.x, t.x) == 0)),
                     'y': ('y' in self.mirror and (sign_threshold(co.y, t.y) != sign_threshold(co_orig.y, t.y) or sign_threshold(co_orig.y, t.y) == 0)),
                     'z': ('z' in self.mirror and (sign_threshold(co.z, t.z) != sign_threshold(co_orig.z, t.z) or sign_threshold(co_orig.z, t.z) == 0)),
                 }
-                # iteratively zero out the component
-                for _ in range(1000):
-                    d = 0
-                    if zero['x']: co.x, d = co.x * 0.95, max(abs(co.x), d)
-                    if zero['y']: co.y, d = co.y * 0.95, max(abs(co.y), d)
-                    if zero['z']: co.z, d = co.z * 0.95, max(abs(co.z), d)
-                    co_world = self.matrix_world @ Vector((*co, 1.0))
-                    co_world_snapped = nearest_point_valid_sources(context, co_world.xyz / co_world.w, world=True)
-                    co = self.matrix_world_inv @ co_world_snapped
-                    if d < 0.001: break  # break out if change was below threshold
+                
+                # 1. Ép về trục đối xứng ngay lập tức
                 if zero['x']: co.x = 0
                 if zero['y']: co.y = 0
                 if zero['z']: co.z = 0
 
-            # if self.mirror:
-            #     co_orig = self.bmvs_co_orig[bmv]
-            #     if 'x' in self.mirror and sign_threshold(co.x, self.mirror_threshold) != sign_threshold(co_orig.x, self.mirror_threshold): co.x = 0
-            #     if 'y' in self.mirror and sign_threshold(co.y, self.mirror_threshold) != sign_threshold(co_orig.y, self.mirror_threshold): co.y = 0
-            #     if 'z' in self.mirror and sign_threshold(co.z, self.mirror_threshold) != sign_threshold(co_orig.z, self.mirror_threshold): co.z = 0
-            #     co = nearest_point_valid_sources(context, co, world=False)
+                # 2. Chiếu lên bề mặt (Snap to surface)
+                co_world = self.matrix_world @ Vector((*co, 1.0))
+                co_world_snapped = nearest_point_valid_sources(context, co_world.xyz / co_world.w, world=True)
+                
+                if co_world_snapped:
+                    co = self.matrix_world_inv @ co_world_snapped
+                    # 3. Khóa lại trục lần nữa cho chắc
+                    if zero['x']: co.x = 0
+                    if zero['y']: co.y = 0
+                    if zero['z']: co.z = 0
 
             self.last_success[bmv] = co
             if distance > prop_dist_world: continue
@@ -919,7 +914,6 @@ class RFOperator_Translate(RFOperator):
                 co = region_2d_to_location_3d(context.region, context.region_data, co2d_orig + self.delta * factor, self.matrix_world @ co_orig)
                 co = nearest_point_valid_sources(context, co, world=True)
                 co = self.matrix_world_inv @ co
-
             if self.mirror:
                 t = self.mirror_threshold
                 zero = {
@@ -927,19 +921,18 @@ class RFOperator_Translate(RFOperator):
                     'y': ('y' in self.mirror and (sign_threshold(co.y, t.y) != sign_threshold(co_orig.y, t.y) or sign_threshold(co_orig.y, t.y) == 0)),
                     'z': ('z' in self.mirror and (sign_threshold(co.z, t.z) != sign_threshold(co_orig.z, t.z) or sign_threshold(co_orig.z, t.z) == 0)),
                 }
-                # iteratively zero out the component
-                for _ in range(1000):
-                    d = 0
-                    if zero['x']: co.x, d = co.x * 0.95, max(abs(co.x), d)
-                    if zero['y']: co.y, d = co.y * 0.95, max(abs(co.y), d)
-                    if zero['z']: co.z, d = co.z * 0.95, max(abs(co.z), d)
-                    co_world = self.matrix_world @ Vector((*co, 1.0))
-                    co_world_snapped = nearest_point_valid_sources(context, co_world.xyz / co_world.w, world=True)
-                    co = self.matrix_world_inv @ co_world_snapped
-                    if d < 0.001: break  # break out if change was below threshold
                 if zero['x']: co.x = 0
                 if zero['y']: co.y = 0
                 if zero['z']: co.z = 0
+
+                co_world = self.matrix_world @ Vector((*co, 1.0))
+                co_world_snapped = nearest_point_valid_sources(context, co_world.xyz / co_world.w, world=True)
+                
+                if co_world_snapped:
+                    co = self.matrix_world_inv @ co_world_snapped
+                    if zero['x']: co.x = 0
+                    if zero['y']: co.y = 0
+                    if zero['z']: co.z = 0
 
             self.last_success[bmv] = co
             if distance > prop_dist_world: continue
