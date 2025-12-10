@@ -373,6 +373,14 @@ class Contours_Logic:
                 closest_pts = [closest_point_segment(npt_local_snapped, pt0, pt1) for (pt0,pt1) in iter_pairs(points, self.cyclic)]
                 bmv.co = min(closest_pts, key=lambda pt:(pt-npt_local_snapped).length)
 
+            # [NEW] Symmetry Snap Logic - Fix error in TODO list
+            if has_mirror_x(context) or has_mirror_y(context) or has_mirror_z(context):
+                t = mirror_threshold(context)
+                co = bmv.co
+                if has_mirror_x(context) and abs(co.x) <= t.x: co.x = 0
+                if has_mirror_y(context) and abs(co.y) <= t.y: co.y = 0
+                if has_mirror_z(context) and abs(co.z) <= t.z: co.z = 0
+
 
         if not self.cyclic:
             # snap ends
@@ -468,9 +476,18 @@ class Contours_Logic:
         assert npts, f'Could not find enough points!?'
         assert len(npts) >= vertex_count
 
-        npts = [
-            Mi @ nearest_point_valid_sources(context, M @ pt, world=True) for pt in npts
-        ]
+        npts_raw = npts
+        npts = []
+        mt = mirror_threshold(context)
+        mx, my, mz = has_mirror_x(context), has_mirror_y(context), has_mirror_z(context)
+
+        for pt in npts_raw:
+            snapped_pt = Mi @ nearest_point_valid_sources(context, M @ pt, world=True)
+            if mx and abs(snapped_pt.x) <= mt.x: snapped_pt.x = 0
+            if my and abs(snapped_pt.y) <= mt.y: snapped_pt.y = 0
+            if mz and abs(snapped_pt.z) <= mt.z: snapped_pt.z = 0
+            
+            npts.append(snapped_pt)
 
         # create geometry!
         nbmvs = [ self.bm.verts.new(pt) for pt in npts[:vertex_count] ]

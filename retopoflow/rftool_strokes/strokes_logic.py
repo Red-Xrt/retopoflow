@@ -270,29 +270,49 @@ class Strokes_Logic:
                 longest_stroke = None
                 current_stroke = []
                 prev_pt, prev_side = self.stroke3D[0], sides[0]
+                
+                # [OPTIMIZED] Helper function to snap point to mirror plane
+                def snap_to_mirror_plane(pt_to_snap):
+                    if 'x' in self.mirror and abs(pt_to_snap.x) < self.mirror_threshold * 2: pt_to_snap.x = 0
+                    if 'y' in self.mirror and abs(pt_to_snap.y) < self.mirror_threshold * 2: pt_to_snap.y = 0
+                    if 'z' in self.mirror and abs(pt_to_snap.z) < self.mirror_threshold * 2: pt_to_snap.z = 0
+                    return pt_to_snap
+
                 for (pt, side) in zip(self.stroke3D, sides):
                     if prev_side == side:
                         if side == correct_side: current_stroke += [pt]
                         prev_pt = pt
                         continue
-                    # switched sides
+                    
+                    # switched sides - Find intersection
                     (pt0, pt1) = (prev_pt, pt) if prev_side == correct_side else (pt, prev_pt)
-                    for _ in range(100):
-                        pt = pt0 + (pt1 - pt0) * 0.5
-                        s = self.get_mirror_side(pt)
-                        if 0 in s: break
-                        (pt0, pt1) = (pt, pt1) if s == correct_side else (pt0, pt)
-                    s = Vector((
-                        0 if side[0] != correct_side[0] else 1,
-                        0 if side[1] != correct_side[1] else 1,
-                        0 if side[2] != correct_side[2] else 1,
-                    ))
-                    current_stroke += [s * pt]
+                    
+                    # [OPTIMIZATION] Reduce iterations 100 -> 10 and add Force Snap
+                    # Binary search converges very fast. 10 iterations is enough for visual accuracy.
+                    for _ in range(10): 
+                        pt_mid = pt0 + (pt1 - pt0) * 0.5
+                        s = self.get_mirror_side(pt_mid)
+                        if 0 in s: 
+                            pt0 = pt_mid # Found it exactly
+                            break
+                        # Logic binary search: narrowing down the interval
+                        if s == correct_side:
+                            pt0 = pt_mid
+                        else:
+                            pt1 = pt_mid
+                    
+                    # Force Snap: Ensure the intersection point is EXACTLY on the mirror plane
+                    # This prevents micro-gaps that Mirror Modifier can't weld
+                    final_pt = snap_to_mirror_plane(pt0)
+                    
+                    current_stroke += [final_pt]
+                    
                     if prev_side == correct_side:
                         if longest_stroke is None or len(current_stroke) > len(longest_stroke):
                             longest_stroke = current_stroke
                         current_stroke = []
                     prev_pt, prev_side = pt, side
+                
                 if longest_stroke is None or len(current_stroke) > len(longest_stroke):
                     longest_stroke = current_stroke
                 new_stroke = longest_stroke
