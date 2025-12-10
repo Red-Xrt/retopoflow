@@ -29,6 +29,7 @@ from bpy_extras.view3d_utils import location_3d_to_region_2d
 from mathutils import Vector, Matrix
 from mathutils.geometry import intersect_line_line_2d
 from mathutils.bvhtree import BVHTree
+from mathutils.kdtree import KDTree
 
 import math
 import time
@@ -51,47 +52,6 @@ from ..common.drawing import (
 from ...addon_common.common import bmesh_ops as bmops
 from ...addon_common.common.maths import closest_point_segment, Point, sign, sign_threshold, clamp
 from ...addon_common.common.colors import Color4, Color
-
-
-class Accel:
-    def __init__(self, bmverts, matrix_world):
-        self.bmverts = bmverts
-        self.matrix_world = matrix_world
-        self.time = time.time() - 1000
-        self.rebuild()
-
-    def rebuild(self, *, delta=1.0):
-        if time.time() - self.time < delta: return
-        M = self.matrix_world
-        self.time = time.time()
-        pts = [M @ v.co for v in self.bmverts]
-        self.min_x, self.min_y, self.min_z = min(pt.x for pt in pts), min(pt.y for pt in pts), min(pt.z for pt in pts)
-        self.max_x, self.max_y, self.max_z = max(pt.x for pt in pts), max(pt.y for pt in pts), max(pt.z for pt in pts)
-        self.bins = [[[[] for _ in range(10)] for _ in range(10)] for _ in range(10)]
-        for v in self.bmverts:
-            ix, iy, iz = self.index(M @ v.co)
-            self.bins[ix][iy][iz].append(v)
-
-    def index(self, co_world):
-        ix = clamp(int((co_world.x - self.min_x) / max(0.001, self.max_x - self.min_x) * 10), 0, 9)
-        iy = clamp(int((co_world.y - self.min_y) / max(0.001, self.max_y - self.min_y) * 10), 0, 9)
-        iz = clamp(int((co_world.z - self.min_z) / max(0.001, self.max_z - self.min_z) * 10), 0, 9)
-        return (ix, iy, iz)
-
-    def get(self, co_world, radius_world):
-        M = self.matrix_world
-        r2 = radius_world * radius_world
-        min_ix, min_iy, min_iz = self.index(co_world - Vector((radius_world, radius_world, radius_world)))
-        max_ix, max_iy, max_iz = self.index(co_world + Vector((radius_world, radius_world, radius_world)))
-        return {
-            v
-            for ix in range(min_ix, max_ix+1)
-            for iy in range(min_iy, max_iy+1)
-            for iz in range(min_iz, max_iz+1)
-            for v in self.bins[ix][iy][iz]
-            if (M @ v.co - co_world).length_squared <= r2
-        }
-
 
 class Relax_Logic:
     def __init__(self, context, event, brush, relax):
@@ -179,9 +139,12 @@ class Relax_Logic:
             if opt_mask_selected == 'EXCLUDE' and bmv.select: continue
             if opt_mask_selected == 'ONLY'    and not bmv.select: continue
             self.verts_filtered.append(bmv)
-        self.verts_accel = Accel(self.verts_filtered, self.matrix_world)
-        self.verts_accel_time = time.time()
-
+        self.kd = KDTree(len(self.verts_filtered))
+        for i, bmv in enumerate(self.verts_filtered):
+            # Lưu tọa độ World và index của điểm để truy xuất ngược lại sau này
+            self.kd.insert(self.matrix_world @ bmv.co, i)
+        self.kd.balance()
+        
         self.draw_vectors = [[],[],[]]
 
     def cancel(self, context):
@@ -236,8 +199,8 @@ class Relax_Logic:
                 bmops.select(self.bm, bmelem)
             bmops.flush_selection(self.bm, self.em)
 
-        self.verts_accel.rebuild()
-        verts = self.verts_accel.get(hit['co_world'], radius3D)
+        near = self.kd.find_range(hit['co_world'], radius3D)
+        verts = {self.verts_filtered[i] for (_, i, _) in near}
         edges = { bme for bmv in verts for bme in bmv.link_edges }
         faces = { bmf for bmv in verts for bmf in bmv.link_faces }
         vert_strength = { bmv:brush.get_strength_Point(M @ bmv.co) for bmv in verts }
@@ -505,19 +468,22 @@ class Relax_Logic:
                         'y': ('y' in self.mirror and (sign_threshold(co.y, t.y) != sign_threshold(co_orig.y, t.y) or sign_threshold(co_orig.y, t.y) == 0)),
                         'z': ('z' in self.mirror and (sign_threshold(co.z, t.z) != sign_threshold(co_orig.z, t.z) or sign_threshold(co_orig.z, t.z) == 0)),
                     }
-                    # iteratively zero out the component
-                    for _ in range(1000):
-                        d = 0
-                        if zero['x']: co.x, d = co.x * 0.95, max(abs(co.x), d)
-                        if zero['y']: co.y, d = co.y * 0.95, max(abs(co.y), d)
-                        if zero['z']: co.z, d = co.z * 0.95, max(abs(co.z), d)
-                        co_world = M @ Vector((*co, 1.0))
-                        co_world_snapped = nearest_point_valid_sources(context, co_world.xyz / co_world.w, world=True)
-                        co = Mi @ co_world_snapped
-                        if d < 0.001: break  # break out if change was below threshold
+                    
+                    # [IMPROVED] Symmetry Snap logic (Vector Projection)
                     if zero['x']: co.x = 0
                     if zero['y']: co.y = 0
                     if zero['z']: co.z = 0
+                    
+                    # 2. Snap to surface
+                    co_world = M @ Vector((*co, 1.0))
+                    co_world_snapped = nearest_point_valid_sources(context, co_world.xyz / co_world.w, world=True)
+                    
+                    if co_world_snapped:
+                        co = Mi @ co_world_snapped
+                        if zero['x']: co.x = 0
+                        if zero['y']: co.y = 0
+                        if zero['z']: co.z = 0
+                    
                     co_local_snapped = co
 
                 update_to[bmv] = co_local_snapped
