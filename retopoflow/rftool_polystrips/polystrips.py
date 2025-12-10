@@ -507,19 +507,19 @@ class RFOperator_PolyStrips_Edit(RFOperator):
                     'y': ('y' in self.mirror and (sign_threshold(co.y, t.y) != sign_threshold(pt_edit_orig.y, t.y) or sign_threshold(pt_edit_orig.y, t.y) == 0)),
                     'z': ('z' in self.mirror and (sign_threshold(co.z, t.z) != sign_threshold(pt_edit_orig.z, t.z) or sign_threshold(pt_edit_orig.z, t.z) == 0)),
                 }
-                # iteratively zero out the component
-                for _ in range(1000):
-                    d = 0
-                    if zero['x']: co.x, d = co.x * 0.95, max(abs(co.x), d)
-                    if zero['y']: co.y, d = co.y * 0.95, max(abs(co.y), d)
-                    if zero['z']: co.z, d = co.z * 0.95, max(abs(co.z), d)
-                    co_world = M @ Vector((*co, 1.0))
-                    co_world_snapped = nearest_point_valid_sources(context, co_world.xyz / co_world.w, world=True)
-                    co = Mi @ co_world_snapped
-                    if d < 0.001: break  # break out if change was below threshold
+                
+                # [LOGIC MỚI] Thay vòng lặp 1000 lần bằng phép chiếu trực tiếp (Vector Projection)
                 if zero['x']: co.x = 0
                 if zero['y']: co.y = 0
                 if zero['z']: co.z = 0
+                co_world = M @ Vector((*co, 1.0))
+                co_world_snapped = nearest_point_valid_sources(context, co_world.xyz / co_world.w, world=True)
+                
+                if co_world_snapped:
+                    co = Mi @ co_world_snapped
+                    if zero['x']: co.x = 0
+                    if zero['y']: co.y = 0
+                    if zero['z']: co.z = 0
 
             bmv.co = co
 
