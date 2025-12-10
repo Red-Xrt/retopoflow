@@ -211,12 +211,36 @@ def iter_all_valid_sources(context):
 # Note: the initial call to obj.ray_cast can take a noticeable moment if obj is really big (>1m triangles)
 # while the BVH is built.  Every subsequent call to obj.ray_cast is very fast due to BVH being cached.
 # This function forces Blender to generate BVHs for all source objects, so we can control when they are built.
+# [NEW] Optimized Async BVH Caching
 def prep_raycast_valid_sources(context):
-    print(f'CACHING BVHS FOR ALL SOURCE OBJECTS')
-    start = time.time()
-    for obj in iter_all_valid_sources(context):
-        obj.ray_cast(Vector((0,0,0)), Vector((1,0,0)))
-    print(f'  {time.time() - start:0.2f}secs')
+    print(f'RetopoFlow: Starting async BVH warmup...')
+
+    # Create a list of objects that need processing
+    # We convert the generator to a list to keep a stable reference
+    sources = list(iter_all_valid_sources(context))
+    
+    def bvh_warmup_worker():
+        # If no objects left, stop the timer
+        if not sources:
+            print(f'RetopoFlow: Async BVH warmup finished.')
+            return None 
+        
+        # Pop one object and process it
+        obj = sources.pop()
+        try:
+            # Trigger BVH build by casting a dummy ray.
+            # This forces Blender to generate the acceleration structure for this mesh.
+            obj.ray_cast(Vector((0,0,0)), Vector((1,0,0)))
+        except Exception as e:
+            # Silently fail if object is invalid/removed, don't crash the worker
+            pass
+        
+        # Schedule next run in a very short time (0.001s) 
+        # to allow UI updates in between checks.
+        return 0.001
+
+    # Register the worker with Blender's timer system
+    bpy.app.timers.register(bvh_warmup_worker)
 
 def raycast_valid_sources(context, point):
     ray_world = ray_from_point(context, point)
