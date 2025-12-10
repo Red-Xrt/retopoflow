@@ -367,41 +367,53 @@ class RFCore:
     @staticmethod
     def stop():
         if not RFCore.is_running: return
-        print(f'Stopping RFCore')
+        print(f'Stopping RFCore (Gracefully)')
+        
+        # [QUAN TRỌNG] Ngắt kết nối với Viewport ngay lập tức để tránh vẽ lên dữ liệu đã chết
+        RFCore.remove_handlers()
+        
         RFCore.is_running = False
         RFCore.event_mouse = None
         RFCore.is_controlling = False
 
-        for rfop in RFOperator.active_operators:
-            try:
-                rfop.stop()
-            except ReferenceError as e:
-                # ReferenceError likely means that Blender is shutting down
-                # we will gracefully "handle" this by ignoring it
-                pass
-            except Exception as e:
-                print(f'Caught unexpected Exception while trying to stop active RetopoFlow operators')
-                print(f'  {e}')
-                debugger.print_exception()
+        # Bây giờ mới an toàn để tắt các operators con
+        if hasattr(RFOperator, 'active_operators'):
+            # Tạo bản sao list để tránh lỗi "list changed size during iteration"
+            active_ops = list(RFOperator.active_operators)
+            for rfop in active_ops:
+                try:
+                    if hasattr(rfop, 'stop'):
+                        rfop.stop()
+                except (ReferenceError, AttributeError):
+                    # Nếu Blender đã xóa nó rồi thì kệ nó, không cần quan tâm
+                    pass
+                except Exception as e:
+                    print(f'Warning: Error stopping operator: {e}')
 
-        # clean up cache, otherwise old bmesh objects may become invalid even if
-        # blender does not recognize them as invalid (bm.is_valid still True)
+        # Clean up cache
         get_object_bmesh.cache.clear()
 
-        bpy.app.handlers.save_pre.remove(RFCore.handle_save_pre)
-        bpy.app.handlers.load_pre.remove(RFCore.handle_load_pre)
-        bpy.app.handlers.redo_post.remove(RFCore.handle_redo_post)
-        bpy.app.handlers.undo_post.remove(RFCore.handle_undo_post)
-        bpy.app.handlers.depsgraph_update_post.remove(RFCore.handle_depsgraph_update)
+        # Gỡ các Blender Handlers an toàn
+        def safe_remove_handler(handler_list, handler_func):
+            if handler_func in handler_list:
+                handler_list.remove(handler_func)
 
-        RFCore.remove_handlers()
+        safe_remove_handler(bpy.app.handlers.save_pre, RFCore.handle_save_pre)
+        safe_remove_handler(bpy.app.handlers.load_pre, RFCore.handle_load_pre)
+        safe_remove_handler(bpy.app.handlers.redo_post, RFCore.handle_redo_post)
+        safe_remove_handler(bpy.app.handlers.undo_post, RFCore.handle_undo_post)
+        safe_remove_handler(bpy.app.handlers.depsgraph_update_post, RFCore.handle_depsgraph_update)
 
         RFCore.running_in_areas.clear()
 
         if not getattr(RFCore, 'is_saving', False):
-            bpy.context.scene.retopoflow.saved_tool = ''
+            if hasattr(bpy.context.scene, 'retopoflow'):
+                bpy.context.scene.retopoflow.saved_tool = ''
 
-        mirror.cleanup_mirror(bpy.context)
+        try:
+            mirror.cleanup_mirror(bpy.context)
+        except:
+            pass
 
         RFCore.resetter.reset()
 
@@ -527,36 +539,43 @@ class RFCore:
 
     @staticmethod
     def handle_postview(context, area):
-        if len(area.spaces) == 0:
+        # [SAFETY CHECK] Kiểm tra sinh tồn: Nếu RFCore đã tắt hoặc Area bị hỏng -> Cút ngay
+        if not RFCore.is_running or not context or not area:
+            return
+
+        try:
+            if len(area.spaces) == 0:
+                RFCore.remove_handlers()
+                return
+        except ReferenceError:
             RFCore.remove_handlers()
             return
-        # print(f'handle_postview {len(area.spaces)}')
-        if not RFCore.is_controlling: return
-        if not RFCore.is_running: return
-        if RFOperator.active_operator():
-            try:
-                RFOperator.active_operator().draw_postview(context)
-            except ReferenceError as e:
-                print(f'Caught ReferenceError while trying to draw tool postview')
-                print(f'  {e}')
-                debugger.print_exception()
-                RFCore.stop()
-            except Exception as e:
-                print(f'Caught exception while trying to draw tool postview')
-                print(f'  {e}')
-                debugger.print_exception()
-                RFCore.quick_switch_to_reset(RFCore.selected_RFTool_idname)
-                # RFCore.restart()
 
-        selected_RFTool = RFTools[RFCore.selected_RFTool_idname]
-        brush = selected_RFTool.rf_brush
-        if brush:
+        if not RFCore.is_controlling: return
+
+        # Chỉ vẽ nếu Operator còn sống
+        op = RFOperator.active_operator()
+        if op:
             try:
-                brush.draw_postview(context)
-            except ReferenceError as re:
-                print(f'Caught ReferenceError while trying to draw brush postview')
-                print(f'  {re}')
-                RFCore.restart()
+                op.draw_postview(context)
+            except (ReferenceError, AttributeError):
+                # Operator chết bất đắc kỳ tử -> Tắt RFCore ngay để tránh crash
+                RFCore.stop()
+                return
+            except Exception as e:
+                print(f'Draw Error: {e}')
+                # Không restart bừa bãi, chỉ reset tool nếu cần thiết
+                # RFCore.quick_switch_to_reset(RFCore.selected_RFTool_idname)
+
+        # Vẽ Brush (nếu có)
+        if RFCore.selected_RFTool_idname and RFCore.selected_RFTool_idname in RFTools:
+            selected_RFTool = RFTools[RFCore.selected_RFTool_idname]
+            brush = selected_RFTool.rf_brush
+            if brush:
+                try:
+                    brush.draw_postview(context)
+                except (ReferenceError, AttributeError):
+                    pass
 
     @staticmethod
     def handle_postpixel(context, area):
@@ -742,19 +761,12 @@ class RFCore_Operator(RFRegisterClass, bpy.types.Operator):
         self.is_running = True
 
     def __del__(self):
-        print(f'RFCore_Operator.__del__!!!')
+        # Chỉ giảm bộ đếm tĩnh, không cố truy cập Blender struct (self.xxx) ở đây
+        # vì lúc này Blender có thể đã xóa object đó rồi.
         try:
-            print(f'    {self=}')
-            print(f'    {getattr(self, "is_running", None)=}')
-            if hasattr(self, 'running_in_area') and self.running_in_area in RFCore.running_in_areas:
-                RFCore.running_in_areas.remove(self.running_in_area)
-            self.is_running = False
-        except ReferenceError:
-            # Blender struct has been removed, can't access or set properties
-            print(f'    <struct removed>')
-        finally:
             RFCore_Operator.running_operators -= 1
-        print(f'  done')
+        except:
+            pass
 
     def execute(self, context):
         prep_raycast_valid_sources(context)
