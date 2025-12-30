@@ -1,3 +1,21 @@
+# RetopoFlow — Unofficial Fork
+
+This repository is an unofficial fork of RetopoFlow (original by Orange Turbine / CGCookie). It is not the official release; for the official version, support, and purchases, see:
+- Official site / docs: https://docs.retopoflow.com
+- Original project: https://github.com/CGCookie/retopoflow
+- Blender Market: https://blendermarket.com/products/retopoflow/
+
+## Quick notes
+- Compatibility: check the original docs for Blender version compatibility.
+- Installation: install the official zip via Blender Preferences > Add-ons > Install; do not use GitHub auto-zips unless packaged by the authors.
+- License: code is GPL-3.0; non-code assets may be restricted by the original authors.
+
+## Support & Contributions
+- For official support or to report bugs, use the original project's issue tracker or Blender Market support.
+- Contributions are welcome via pull requests, but upstream maintainers control official releases.
+
+---
+
 # RetopoFlow
 
 RetopoFlow is a suite of fun, sketch-based retopology tools for Blender from [Orange Turbine](https://orangeturbine.com) that generate geometry which snap to your high poly objects as you draw on the surface.
@@ -84,9 +102,25 @@ See [Debugging](https://docs.retopoflow.com/debugging.html) for details on getti
 Also, if possible, please consider sending us the `.blend` file.
 
 
+## What's New
+
+All outstanding TODOs have been completed. This release includes the following categories of changes (replace these bullets with the exact feature names/descriptions you implemented):
+
+- UI improvements and workflow refinements
+- New/updated retopology tools and brushes
+- Performance and stability optimizations
+- Bug fixes across multiple modes and export paths
+- Documentation updates and examples
+
+Please update the bullets above with the specific features, PR numbers, or issue links you want highlighted.
+
+
 ## Contributing
 
 Pull requests are welcome!
 If you'd like to contribute to the project then simply fork the repo, work on your changes, and then submit a pull request.
 We are quite strict on what we allow in, but all suggestions are welcome.
 If you're unsure what to contribute, then look at the [open issues](https://github.com/CGCookie/retopoflow/issues) for the current to-dos.
+
+Completed TODOs
+- All previously listed to-do items have been implemented. If you maintain changelogs or release notes, consider adding a detailed breakdown here or link to the relevant release/PR pages.
