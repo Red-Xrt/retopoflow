@@ -376,7 +376,7 @@ class PolyStrips_Logic:
 
             snap0 = trim_stroke_to_bmf(stroke3D_local, snap_bmf0, True, limit_bmes0)
             if snap0:
-                if snap0['error']:
+                if snap0.get('error'):
                     self.error = True
                     print(f'ERROR: {snap0["error"]} on snap0')
                     if snap_bmf1 is None: snap_bmf1 = bmfs[-1] if bmfs else None
@@ -385,7 +385,7 @@ class PolyStrips_Logic:
 
             snap1 = trim_stroke_to_bmf(stroke3D_local, snap_bmf1, False, limit_bmes1)
             if snap1:
-                if snap1['error']:
+                if snap1.get('error'):
                     self.error = True
                     print(f'ERROR: {snap1["error"]} on snap1')
                     if snap_bmf1 is None: snap_bmf1 = bmfs[-1] if bmfs else None

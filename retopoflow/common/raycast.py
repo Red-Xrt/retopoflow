@@ -240,7 +240,8 @@ def prep_raycast_valid_sources(context):
         return 0.001
 
     # Register the worker with Blender's timer system
-    bpy.app.timers.register(bvh_warmup_worker)
+    if not bpy.app.timers.is_registered(bvh_warmup_worker):
+        bpy.app.timers.register(bvh_warmup_worker)
 
 def raycast_valid_sources(context, point):
     ray_world = ray_from_point(context, point)
@@ -253,6 +254,10 @@ def raycast_valid_sources(context, point):
     Me = context.edit_object.matrix_world
     Mei = Me.inverted()
     Met = Me.transposed()
+
+    # Optimization: Use a generator to avoid creating a full list if not needed
+    # but iter_all_valid_sources is already a generator.
+
     for obj in iter_all_valid_sources(context):
         M   = obj.matrix_world
         Mi  = M.inverted()

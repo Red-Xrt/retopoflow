@@ -857,8 +857,14 @@ def PP_get_edge_quad_verts(context, p0, p1, mouse, matrix_world, parallel_stable
 
     between_len = between.length * v01.normalized().dot(perp)
 
-    for tries in range(32):
+    # Optimization: Reduce iterations and add distance check
+    # 32 iterations is overkill for visual placement. 10-12 gives sufficient precision.
+    for tries in range(12):
         p2, p3 = mid23 + toward * (dist01 / 2), mid23 - toward * (dist01 / 2)
+
+        # Optimization: Check if points are too close to be meaningful
+        if dist01 < 0.001: break
+
         hit2 = raycast_point_valid_sources(context, p2)
         hit3 = raycast_point_valid_sources(context, p3)
         if hit2 and hit3:
