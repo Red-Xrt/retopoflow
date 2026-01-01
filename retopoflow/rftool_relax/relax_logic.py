@@ -88,18 +88,25 @@ class Relax_Logic:
         self.prev_displace = {}
         self.bounce_mult = {}
 
-        self._boundary = []
+        self._boundary_map = {}
         if relax.mask_boundary == 'SLIDE':
-            self._boundary = [
-                (Vector(bme.verts[0].co), Vector(bme.verts[1].co))
-                for bme in self.bm.edges
-                if is_bmedge_boundary(bme, self.mirror, self.mirror_threshold, self.mirror_clip)
-            ]
+            for bme in self.bm.edges:
+                if is_bmedge_boundary(bme, self.mirror, self.mirror_threshold, self.mirror_clip):
+                    v0 = Vector(bme.verts[0].co)
+                    v1 = Vector(bme.verts[1].co)
+                    seg = (v0, v1)
+                    for bmv in bme.verts:
+                        if bmv not in self._boundary_map: self._boundary_map[bmv] = []
+                        self._boundary_map[bmv].append(seg)
 
         self.bvh = BVHTree.FromBMesh(self.bm)
 
         def is_bmvert_on_symmetry_plane(bmv):
-            # TODO: IMPLEMENT!
+            if not self.mirror: return False
+            co = bmv.co
+            if 'x' in self.mirror and sign_threshold(co.x, self.mirror_threshold.x) == 0: return True
+            if 'y' in self.mirror and sign_threshold(co.y, self.mirror_threshold.y) == 0: return True
+            if 'z' in self.mirror and sign_threshold(co.z, self.mirror_threshold.z) == 0: return True
             return False
 
         def is_bmvert_on_ngon(bmv):
@@ -446,9 +453,9 @@ class Relax_Logic:
                 if opt_draw_net:
                     self.draw_vectors[2].append((bmv.co, displace_vec * 100))
 
-                if opt_mask_boundary == 'SLIDE' and is_bmvert_boundary(bmv, self.mirror, self.mirror_threshold, self.mirror_clip):
+                if opt_mask_boundary == 'SLIDE' and bmv in self._boundary_map:
                     p, d = None, None
-                    for (v0, v1) in self._boundary:
+                    for (v0, v1) in self._boundary_map[bmv]:
                         p_ = closest_point_segment(co, v0, v1)
                         d_ = (p_ - co).length
                         if p is None or d_ < d: p, d = p_, d_
