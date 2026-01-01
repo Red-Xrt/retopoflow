@@ -121,6 +121,7 @@ class PP_Logic:
         self.parallel_stable = parallel_stable
         self.ctrl_held = event.ctrl
         self.shift_held = event.shift
+        self.alt_held = event.alt
 
         if not self.bm or not self.bm.is_valid:
             self.bm, self.em = get_bmesh_emesh(context)
@@ -196,10 +197,43 @@ class PP_Logic:
 
         # Check for Delete Mode (Ctrl held + Hovering Vert/Edge)
         if self.ctrl_held:
+            # Force Delete Mode (Ctrl + Shift or Ctrl + Alt)
+            if self.shift_held or self.alt_held:
+                 if self.nearest.bmv or self.nearest_bme.bme:
+                     self.state = PP_Action.DELETE
+                     return
+
+            # Smart Delete Mode (Ctrl only)
+            # Prioritize building/connecting if context suggests it.
+            is_delete = False
+
             if self.nearest.bmv:
-                self.state = PP_Action.DELETE
-                return
-            if self.nearest_bme.bme:
+                # Hovering Vertex
+                if self.selected and self.selected[BMVert]:
+                    # If we have a selection, assume user wants to connect to this vert,
+                    # UNLESS we are hovering the selected vert itself (maybe delete self? or deselect).
+                    # Standard PolyPen connects if we hover a different vert.
+                    if self.nearest.bmv not in self.selected[BMVert]:
+                        # User wants to connect. Do NOT delete.
+                        is_delete = False
+                    else:
+                        # Hovering self. Standard behavior is "Select/Grab".
+                        # Let's keep it safe and NOT delete self with just Ctrl.
+                        is_delete = False
+                else:
+                    # No vertex selection.
+                    # Standard behavior is "Select/Grab" or "Create New".
+                    # We can safely repurpose this to Delete since "Create New" happens on empty space.
+                    is_delete = True
+
+            elif self.nearest_bme.bme:
+                # Hovering Edge
+                # Standard behavior is "Split Edge" (insert vert on edge).
+                # We should preserve this.
+                # So we NEVER delete edge with just Ctrl.
+                is_delete = False
+
+            if is_delete:
                 self.state = PP_Action.DELETE
                 return
 

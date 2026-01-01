@@ -62,7 +62,7 @@ from ..common.interface import draw_line_separator
 
 from ..preferences import RF_Prefs
 
-from .polypen_logic import PP_Logic
+from .polypen_logic import PP_Logic, PP_Action
 
 
 class PolyPen_Insert_Modes:
@@ -208,9 +208,14 @@ class RFOperator_PolyPen(RFOperator):
 
         self.logic.update(context, event, self.insert_mode, self.quad_stability)
 
-        if event.type == 'LEFTMOUSE' and event.value == 'PRESS' and event_modifier_check(event, ctrl=True, shift=False, alt=False, oskey=False):
-            self.logic.commit(context, event)
-            return {'RUNNING_MODAL'}
+        # Allow Shift or Alt for Delete mode
+        is_delete_combo = event.ctrl and (event.shift or event.alt)
+        check_modifiers = event_modifier_check(event, ctrl=True, shift=False, alt=False, oskey=False)
+
+        if event.type == 'LEFTMOUSE' and event.value == 'PRESS':
+             if check_modifiers or is_delete_combo:
+                self.logic.commit(context, event)
+                return {'RUNNING_MODAL'}
 
         if event.type == 'MOUSEMOVE':
             context.area.tag_redraw()
@@ -219,7 +224,8 @@ class RFOperator_PolyPen(RFOperator):
 
     def draw_postpixel(self, context):
         if not self.RFCore.is_current_area(context): return
-        if self.shift_held: return
+        # Allow drawing if shift is held ONLY if we are in delete mode
+        if self.shift_held and self.logic.state != PP_Action.DELETE: return
         self.logic.draw(context)
 
 
