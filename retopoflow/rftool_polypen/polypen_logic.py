@@ -88,6 +88,7 @@ class PP_Action(ValueIntEnum):
     EDGE_VERT      = auto()  # split hovered edge
     VERT_EDGE_EDGE = auto()  # split hovered edge and connect to nearest selected vert
     DELETE         = auto()  # delete hovered vertex/edge
+    SMART_FILL     = auto()  # automatically fill face between nearby verts
 
 
 
@@ -372,6 +373,154 @@ class PP_Logic:
             )
             return
 
+        # Check for Smart Fill (Ghost Face)
+        self.detect_smart_fill(context)
+
+
+    def detect_smart_fill(self, context):
+        if not self.hit: return
+        if self.insert_mode in {'VERT-ONLY', 'EDGE-ONLY'}: return
+
+        # Parameters
+        search_radius_3d = 0.5 # Adjust based on scene scale?
+        search_radius_2d = Drawing.scale(50) # Screen pixels
+
+        candidates = []
+
+        # Find nearby verts using BVH
+        # Note: BVH returns (co, index, dist)
+        # We need to map index back to BMVert
+
+        # 1. From Faces
+        near_faces = self.nearest.bvh_faces.find_range(self.hit, search_radius_3d)
+        for _, idx, _ in near_faces:
+             if idx < len(self.bm.faces):
+                 face = self.bm.faces[idx]
+                 for v in face.verts:
+                     if v not in candidates: candidates.append(v)
+
+        # 2. From Loose Verts
+        near_verts = self.nearest.bvh_verts.find_range(self.hit, search_radius_3d)
+        for _, idx, _ in near_verts:
+             if idx < len(self.nearest.loose_bmvs):
+                 v = self.nearest.loose_bmvs[idx]
+                 if v not in candidates: candidates.append(v)
+
+        if len(candidates) < 3: return
+
+        # Filter by screen space distance
+        p_mouse = location_3d_to_region_2d(context.region, context.region_data, self.matrix_world @ self.hit)
+        if not p_mouse: return
+
+        screen_candidates = []
+        for v in candidates:
+             if is_bmvert_hidden(context, v): continue
+             co_screen = location_3d_to_region_2d(context.region, context.region_data, self.matrix_world @ v.co)
+             if not co_screen: continue
+             if (co_screen - p_mouse).length < search_radius_2d:
+                 screen_candidates.append(v)
+
+        if len(screen_candidates) < 3: return
+
+        # Sort by distance to mouse
+        screen_candidates.sort(key=lambda v: (v.co - self.hit).length_squared)
+        screen_candidates = screen_candidates[:5] # Check closest few
+
+        from itertools import combinations
+
+        best_face = None
+
+        # Helper to check if face exists
+        def face_exists(verts):
+             common_faces = set(verts[0].link_faces)
+             for v in verts[1:]:
+                 common_faces &= set(v.link_faces)
+             return len(common_faces) > 0
+
+        # Helper to check convexity and normal
+        def is_valid_candidate(verts):
+             if face_exists(verts): return False
+
+             # Project to 2D for winding check
+             pts = [location_3d_to_region_2d(context.region, context.region_data, self.matrix_world @ v.co) for v in verts]
+             if any(p is None for p in pts): return False
+
+             # Check Convexity (simple cross product check)
+             # Assuming CCW or CW winding, all cross products of adjacent edges should have same sign
+             import math
+
+             signed_area = 0
+             for i in range(len(pts)):
+                 p1 = pts[i]
+                 p2 = pts[(i + 1) % len(pts)]
+                 signed_area += (p2.x - p1.x) * (p2.y + p1.y)
+
+             # Simple convex check for Quad: Diagonals must intersect?
+             # Or check angles.
+
+             # For now, let's just create it and let BMesh handle geometry,
+             # but strictly we should check valid normal.
+
+             # Normal check
+             # Compute normal of proposed face
+             v0 = verts[1].co - verts[0].co
+             v1 = verts[-1].co - verts[0].co
+             normal = v0.cross(v1).normalized()
+
+             # Check against view direction
+             view_dir = view_forward_direction(context)
+             view_dir = xform_direction(self.matrix_world_inv, view_dir)
+
+             if normal.dot(view_dir) > 0: # Backfacing relative to view
+                  # Try flip
+                  normal = -normal
+                  if normal.dot(view_dir) > 0: return False # Both ways bad?
+
+             return True
+
+        # Try Quads first
+        if self.insert_mode != 'TRI-ONLY':
+            for quad in combinations(screen_candidates, 4):
+                 # We need to order them.
+                 # Pick centroid, sort by angle?
+                 center = sum((v.co for v in quad), Vector((0,0,0))) / 4
+
+                 # Define a local plane or just use view plane logic
+                 # Sort by angle around center in screen space?
+
+                 # Project to screen
+                 q_pts = []
+                 valid_proj = True
+                 for v in quad:
+                     p = location_3d_to_region_2d(context.region, context.region_data, self.matrix_world @ v.co)
+                     if not p:
+                         valid_proj = False
+                         break
+                     q_pts.append((v, p))
+
+                 if not valid_proj: continue
+
+                 center_screen = sum((p for _,p in q_pts), Vector((0,0))) / 4
+                 q_pts.sort(key=lambda vp: math.atan2(vp[1].y - center_screen.y, vp[1].x - center_screen.x))
+
+                 ordered_quad = [vp[0] for vp in q_pts]
+
+                 if is_valid_candidate(ordered_quad):
+                     # Check diagonals for convex quad
+                     p0, p1, p2, p3 = [vp[1] for vp in q_pts]
+                     if intersect_line_line_2d(p0, p2, p1, p3):
+                         self.smart_fill_verts = ordered_quad
+                         self.state = PP_Action.SMART_FILL
+                         return
+
+        # Try Tris
+        if self.insert_mode != 'QUAD-ONLY':
+            for tri in combinations(screen_candidates, 3):
+                 if is_valid_candidate(tri):
+                     self.smart_fill_verts = tri
+                     self.state = PP_Action.SMART_FILL
+                     return
+
 
     def draw(self, context):
         # draw previsualization
@@ -393,6 +542,7 @@ class PP_Logic:
         color_mesh = theme.face_select
         vertex_size = theme.vertex_size
         color_delete = Color4((1.0, 0.1, 0.1, 1.0)) # Red for delete
+        color_ghost = Color4((0.2, 0.8, 1.0, 0.4)) # Cyan transparent
 
         if self.nearest.bmv:
             co = self.matrix_world @ self.nearest.bmv.co
@@ -408,6 +558,25 @@ class PP_Logic:
 
 
         match self.state:
+            case PP_Action.SMART_FILL:
+                if self.smart_fill_verts:
+                    pts = [location_3d_to_region_2d(context.region, context.region_data, self.matrix_world @ v.co) for v in self.smart_fill_verts]
+                    if all(pts):
+                        # Draw ghost face
+                        with Drawing.draw(context, CC_2D_TRIANGLES) as draw:
+                            draw.color(color_ghost)
+                            if len(pts) == 3:
+                                draw.vertex(pts[0]).vertex(pts[1]).vertex(pts[2])
+                            elif len(pts) == 4:
+                                draw.vertex(pts[0]).vertex(pts[1]).vertex(pts[2])
+                                draw.vertex(pts[0]).vertex(pts[2]).vertex(pts[3])
+
+                        # Draw outline
+                        with Drawing.draw(context, CC_2D_LINE_LOOP) as draw:
+                            draw.line_width(2)
+                            draw.color(color_point)
+                            for p in pts: draw.vertex(p)
+
             case PP_Action.DELETE:
                  if self.nearest.bmv:
                      # Already drawn in generic nearest.bmv block
@@ -868,6 +1037,17 @@ class PP_Logic:
                 # Cleanup selection if we deleted something selected
                 if self.selected:
                     self.selected = bmops.get_all_selected(self.bm)
+
+            case PP_Action.SMART_FILL:
+                if self.smart_fill_verts:
+                    bmf = self.bm.faces.new(self.smart_fill_verts)
+                    bmf.normal_update()
+                    # Orient correctly
+                    if xform_direction(self.matrix_world_inv, view_forward_direction(context)).dot(bmf.normal) > 0:
+                        bmf.normal_flip()
+
+                    select_now = [bmf]
+                    self.update_bmesh_selection = True
 
             case _:
                 assert False, f'Unhandled PolyPen state {PP_Action[self.state]}'
