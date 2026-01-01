@@ -87,6 +87,7 @@ class PP_Action(ValueIntEnum):
     TRI_QUAD       = auto()  # insert vert into edge of triangle to turn into quad
     EDGE_VERT      = auto()  # split hovered edge
     VERT_EDGE_EDGE = auto()  # split hovered edge and connect to nearest selected vert
+    DELETE         = auto()  # delete hovered vertex/edge
 
 
 
@@ -118,6 +119,8 @@ class PP_Logic:
 
         self.insert_mode = insert_mode
         self.parallel_stable = parallel_stable
+        self.ctrl_held = event.ctrl
+        self.shift_held = event.shift
 
         if not self.bm or not self.bm.is_valid:
             self.bm, self.em = get_bmesh_emesh(context)
@@ -190,6 +193,15 @@ class PP_Logic:
 
         ###########################################################################################
         # determine state of polypen based on selected geo, hovered geo, and insert mode
+
+        # Check for Delete Mode (Ctrl held + Hovering Vert/Edge)
+        if self.ctrl_held:
+            if self.nearest.bmv:
+                self.state = PP_Action.DELETE
+                return
+            if self.nearest_bme.bme:
+                self.state = PP_Action.DELETE
+                return
 
         if insert_mode is None or insert_mode == 'VERT-ONLY':
             self.state = PP_Action.VERT
@@ -346,18 +358,36 @@ class PP_Logic:
         color_stipple =             Color4((theme.face_select[0], theme.face_select[1], theme.face_select[2], 0))
         color_mesh = theme.face_select
         vertex_size = theme.vertex_size
+        color_delete = Color4((1.0, 0.1, 0.1, 1.0)) # Red for delete
 
         if self.nearest.bmv:
             co = self.matrix_world @ self.nearest.bmv.co
             p = location_3d_to_region_2d(context.region, context.region_data, co)
             with Drawing.draw(context, CC_2D_POINTS) as draw:
                 draw.point_size(vertex_size + 4)
-                draw.border(width=2, color=color_point)
-                draw.color(color_border_transparent)
+                if self.state == PP_Action.DELETE:
+                     draw.color(color_delete)
+                else:
+                     draw.border(width=2, color=color_point)
+                     draw.color(color_border_transparent)
                 draw.vertex(p)
 
 
         match self.state:
+            case PP_Action.DELETE:
+                 if self.nearest.bmv:
+                     # Already drawn in generic nearest.bmv block
+                     pass
+                 elif self.nearest_bme.bme:
+                     bmv0, bmv1 = self.nearest_bme.bme.verts
+                     p0 = location_3d_to_region_2d(context.region, context.region_data, self.matrix_world @ bmv0.co)
+                     p1 = location_3d_to_region_2d(context.region, context.region_data, self.matrix_world @ bmv1.co)
+                     if p0 and p1:
+                         with Drawing.draw(context, CC_2D_LINES) as draw:
+                             draw.line_width(4)
+                             draw.color(color_delete)
+                             draw.vertex(p0).vertex(p1)
+
             case PP_Action.VERT:
                 pt = location_3d_to_region_2d(context.region, context.region_data, self.matrix_world @ self.hit)
                 if not pt: return
@@ -795,6 +825,16 @@ class PP_Logic:
                 select_now = [bmv]
                 select_later = [self.bmf]
 
+            case PP_Action.DELETE:
+                if self.nearest.bmv:
+                    bmesh.ops.delete(self.bm, geom=[self.nearest.bmv], context='VERTS')
+                elif self.nearest_bme.bme:
+                    bmesh.ops.delete(self.bm, geom=[self.nearest_bme.bme], context='EDGES')
+
+                # Cleanup selection if we deleted something selected
+                if self.selected:
+                    self.selected = bmops.get_all_selected(self.bm)
+
             case _:
                 assert False, f'Unhandled PolyPen state {PP_Action[self.state]}'
 
@@ -857,8 +897,14 @@ def PP_get_edge_quad_verts(context, p0, p1, mouse, matrix_world, parallel_stable
 
     between_len = between.length * v01.normalized().dot(perp)
 
-    for tries in range(32):
+    # Optimization: Reduce iterations and add distance check
+    # 32 iterations is overkill for visual placement. 10-12 gives sufficient precision.
+    for tries in range(12):
         p2, p3 = mid23 + toward * (dist01 / 2), mid23 - toward * (dist01 / 2)
+
+        # Optimization: Check if points are too close to be meaningful
+        if dist01 < 0.001: break
+
         hit2 = raycast_point_valid_sources(context, p2)
         hit3 = raycast_point_valid_sources(context, p3)
         if hit2 and hit3:

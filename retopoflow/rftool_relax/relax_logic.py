@@ -88,18 +88,25 @@ class Relax_Logic:
         self.prev_displace = {}
         self.bounce_mult = {}
 
-        self._boundary = []
+        self._boundary_map = {}
         if relax.mask_boundary == 'SLIDE':
-            self._boundary = [
-                (Vector(bme.verts[0].co), Vector(bme.verts[1].co))
-                for bme in self.bm.edges
-                if is_bmedge_boundary(bme, self.mirror, self.mirror_threshold, self.mirror_clip)
-            ]
+            for bme in self.bm.edges:
+                if is_bmedge_boundary(bme, self.mirror, self.mirror_threshold, self.mirror_clip):
+                    v0 = Vector(bme.verts[0].co)
+                    v1 = Vector(bme.verts[1].co)
+                    seg = (v0, v1)
+                    for bmv in bme.verts:
+                        if bmv not in self._boundary_map: self._boundary_map[bmv] = []
+                        self._boundary_map[bmv].append(seg)
 
         self.bvh = BVHTree.FromBMesh(self.bm)
 
         def is_bmvert_on_symmetry_plane(bmv):
-            # TODO: IMPLEMENT!
+            if not self.mirror: return False
+            co = bmv.co
+            if 'x' in self.mirror and sign_threshold(co.x, self.mirror_threshold.x) == 0: return True
+            if 'y' in self.mirror and sign_threshold(co.y, self.mirror_threshold.y) == 0: return True
+            if 'z' in self.mirror and sign_threshold(co.z, self.mirror_threshold.z) == 0: return True
             return False
 
         def is_bmvert_on_ngon(bmv):
@@ -258,6 +265,11 @@ class Relax_Logic:
             fn = bmf_compute_normal(bmf)
             return any(v.normal.dot(fn) <= 0 for v in bmf.verts)
 
+        def get_tangent_plane_projection(vec, normal):
+            """Project vector onto the plane defined by normal"""
+            if normal.length_squared < 1e-6: return vec
+            return vec - normal * vec.dot(normal)
+
         def relax_3d():
             reset_forces()
 
@@ -325,6 +337,12 @@ class Relax_Logic:
                     for rel, bmv in zip(rels, bmvs):
                         rel_len = rel.length
                         f = rel * ((avg_rel_len - rel_len) * strength * 5.0)
+
+                        # Optimization: Slide Relax (Tangential)
+                        # Instead of pushing towards the exact center in 3D (which might be "under" the surface),
+                        # we project this force onto the face plane. This helps maintain volume/surface adherence.
+                        f = get_tangent_plane_projection(f, bmf_z)
+
                         add_force(bmv, f, bmf_midpoint(bmf), (avg_rel_len - rel_len), 40)
 
                 # push verts toward equal edge lengths
@@ -335,6 +353,10 @@ class Relax_Logic:
                         vec = bme_vector(bme)
                         edge_len = vec.length
                         f = vec * ((avg_face_edge_len - edge_len) * strength * 5.0)
+
+                        # Optimization: Slide Relax
+                        f = get_tangent_plane_projection(f, bmf_z)
+
                         add_force(bmv0, f * -0.5, bme_midpoint(bme), (avg_face_edge_len - edge_len), 40)
                         add_force(bmv1, f * 0.5, bme_midpoint(bme), (avg_face_edge_len - edge_len), 40)
 
@@ -446,9 +468,9 @@ class Relax_Logic:
                 if opt_draw_net:
                     self.draw_vectors[2].append((bmv.co, displace_vec * 100))
 
-                if opt_mask_boundary == 'SLIDE' and is_bmvert_boundary(bmv, self.mirror, self.mirror_threshold, self.mirror_clip):
+                if opt_mask_boundary == 'SLIDE' and bmv in self._boundary_map:
                     p, d = None, None
-                    for (v0, v1) in self._boundary:
+                    for (v0, v1) in self._boundary_map[bmv]:
                         p_ = closest_point_segment(co, v0, v1)
                         d_ = (p_ - co).length
                         if p is None or d_ < d: p, d = p_, d_

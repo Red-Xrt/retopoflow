@@ -376,7 +376,7 @@ class PolyStrips_Logic:
 
             snap0 = trim_stroke_to_bmf(stroke3D_local, snap_bmf0, True, limit_bmes0)
             if snap0:
-                if snap0['error']:
+                if snap0.get('error'):
                     self.error = True
                     print(f'ERROR: {snap0["error"]} on snap0')
                     if snap_bmf1 is None: snap_bmf1 = bmfs[-1] if bmfs else None
@@ -385,7 +385,7 @@ class PolyStrips_Logic:
 
             snap1 = trim_stroke_to_bmf(stroke3D_local, snap_bmf1, False, limit_bmes1)
             if snap1:
-                if snap1['error']:
+                if snap1.get('error'):
                     self.error = True
                     print(f'ERROR: {snap1["error"]} on snap1')
                     if snap_bmf1 is None: snap_bmf1 = bmfs[-1] if bmfs else None
@@ -414,8 +414,24 @@ class PolyStrips_Logic:
             ###########################################################################
             # sample the stroke and compute various properties of sample
 
+            # Enhancement: Equidistant Resampling
+            # Resample the stroke to ensure points are evenly spaced before generating the strip.
+            # This creates more uniform quads regardless of drawing speed.
+            stroke_length = self.compute_length3D(stroke3D_local, self.is_cycle)
+            if stroke_length > 0:
+                resample_count = max(2, int(stroke_length / (self.initial_width * 0.5)) + 1) # Higher resolution for resampling
+                resampled_stroke = [
+                    find_point_at(stroke3D_local, self.is_cycle, i / (resample_count - 1))
+                    for i in range(resample_count)
+                ]
+                # We update the stroke to the resampled version for smoother downstream processing
+                # But we keep original points if we need snapping (handled above by warp_stroke)
+                # However, since we are about to sample it for quads, we can just use this logic.
+                stroke3D_local = resampled_stroke
+
             # self.width = self.compute_length3D(self.stroke3D_local, self.is_cycle) / (self.count * 2 - 1)
             if not self.counts:
+                # Recalculate length based on potentially new stroke (though length should be similar)
                 quad_count = round(((self.compute_length3D(stroke3D_local, False) / self.initial_width) + 1) / 2)
                 quad_count = max(2, quad_count)
                 width = self.initial_width
